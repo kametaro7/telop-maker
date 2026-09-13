@@ -1,0 +1,10 @@
+# 取り込んだ動画・編集内容と、書き出したファイル（個人の動画なので Git に入れない）
+data/
+書き出し/
+*.part
+
+# Claude Code のプレビュー設定（作業環境ごとのパスが入る）
+.claude/
+
+.DS_Store
+node_modules/

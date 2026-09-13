@@ -1,0 +1,14 @@
+{
+  "name": "telop-maker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "動画の話し声を Mac の中だけで文字起こしして、テロップを入れるローカルアプリ",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
