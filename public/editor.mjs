@@ -71,6 +71,7 @@ export class Editor {
     this.events.abort();
     this.timeline?.destroy();
     this.stageObserver?.disconnect();
+    this.listObserver?.disconnect();
     this.exportPanel?.destroy();
     this.video.pause();
     this.video.removeAttribute('src');
@@ -189,6 +190,19 @@ export class Editor {
 
     this.stageObserver = new ResizeObserver(() => this.layoutStage());
     this.stageObserver.observe($('#stage'));
+    // 一覧の幅が変わったら（タブの切り替えやウィンドウの大きさの変更）、入力欄の高さを測り直す
+    this.listWidth = 0;
+    this.listObserver = new ResizeObserver(([entry]) => {
+      const width = Math.round(entry.contentRect.width);
+      if (!width) {
+        this.listWidth = 0; // 隠れている間に作り直した行も、次に見えたときに測る
+        return;
+      }
+      if (width === this.listWidth) return;
+      this.listWidth = width;
+      for (const { text } of this.rows.values()) this.autoGrow(text);
+    });
+    this.listObserver.observe($('#captionList'));
 
     this.timeline = new Timeline(this, { scroll: $('#timelineScroll'), spacer: $('#timelineSpacer'), canvas: $('#timeline'), zoom: $('#zoomRange') });
     this.loadPeaks();
@@ -453,6 +467,8 @@ export class Editor {
   }
 
   autoGrow(textarea) {
+    // 見えていないとき（別のタブを開いている間など）に測ると高さが 0 や1文字幅の折り返しになるので、見えてから測る
+    if (!textarea.isConnected || !textarea.clientWidth) return;
     textarea.style.height = 'auto';
     textarea.style.height = `${textarea.scrollHeight + 2}px`;
   }
