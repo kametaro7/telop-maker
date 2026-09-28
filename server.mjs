@@ -16,6 +16,8 @@ import { DEFAULT_STYLE, normalizeStyle } from './public/shared/fonts.mjs';
 
 const PUBLIC_DIR = path.join(APP_DIR, 'public');
 const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
+const ALLOWED_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024 * 1024; // 20 GB
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -45,6 +47,8 @@ function sendJson(res, status, body) {
 }
 
 async function readJson(req, limit = 32 * 1024 * 1024) {
+  const ct = String(req.headers['content-type'] || '').toLowerCase();
+  if (!ct.startsWith('application/json')) throw new HttpError(415, 'データ形式（Content-Type）が正しくありません');
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -195,7 +199,11 @@ route('GET', '/api/projects', async (req, res) => {
 
 // 動画のアップロード（本文がそのままファイルの中身）
 route('POST', '/api/projects', async (req, res) => {
-  const original = decodeHeader(req.headers['x-filename']) || 'video.mp4';
+  const rawFilename = decodeHeader(req.headers['x-filename']);
+  if (!rawFilename) throw new HttpError(400, 'ファイル名が指定されていません');
+  const contentLength = Number(req.headers['content-length'] || 0);
+  if (contentLength > MAX_UPLOAD_BYTES) throw new HttpError(413, 'ファイルが大きすぎます');
+  const original = rawFilename || 'video.mp4';
   const ext = /^\.[a-z0-9]{1,8}$/i.test(path.extname(original)) ? path.extname(original).toLowerCase() : '';
   const project = await store.create({
     name: safeBaseName(path.basename(original, path.extname(original))),
@@ -209,11 +217,19 @@ route('POST', '/api/projects', async (req, res) => {
     notice: null,
   });
   const target = store.projectFile(project.id, project.sourceFile);
+  let uploaded = 0;
+  req.on('data', chunk => {
+    uploaded += chunk.length;
+    if (uploaded > MAX_UPLOAD_BYTES) req.destroy(new HttpError(413, 'ファイルが大きすぎます'));
+  });
   try {
     await pipeline(req, fs.createWriteStream(target));
-  } catch {
+  } catch (err) {
     await store.remove(project.id).catch(() => {});
-    if (!res.headersSent && !res.destroyed) sendJson(res, 400, { error: 'アップロードが途中で止まりました' });
+    if (!res.headersSent && !res.destroyed) {
+      const status = err?.status === 413 ? 413 : 400;
+      sendJson(res, status, { error: status === 413 ? 'ファイルが大きすぎます' : 'アップロードが途中で止まりました' });
+    }
     return;
   }
   const { size } = await fsp.stat(target);
@@ -350,10 +366,16 @@ async function serveStatic(req, res, pathname) {
 
 const server = http.createServer(async (req, res) => {
   try {
-    // 他のサイトからこのアプリを操作されないよう、ホスト名を確認する
+    // 他のサイトからこのアプリを操作されないよう、ホスト名と送信元（Origin / Sec-Fetch-Site）を確認する
     if (!ALLOWED_HOSTS.has(req.headers.host || '')) throw new HttpError(403, 'アクセスできません');
+    const origin = req.headers.origin;
+    if (origin && !ALLOWED_ORIGINS.has(origin)) throw new HttpError(403, '他のサイトからは操作できません');
     const url = new URL(req.url, `http://${req.headers.host}`);
     const method = req.method === 'HEAD' ? 'GET' : req.method;
+    const fetchSite = req.headers['sec-fetch-site'];
+    if ((url.pathname.startsWith('/api/') || method !== 'GET') && fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
+      throw new HttpError(403, '他のサイトからは操作できません');
+    }
     if (url.pathname.startsWith('/api/')) {
       for (const r of routes) {
         if (r.method !== method) continue;
